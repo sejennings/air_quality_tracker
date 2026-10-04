@@ -36,7 +36,7 @@ jobs:
           TAG="$IMAGE:$GITHUB_SHA"
           EXPECTED=$(docker image inspect air-quality:test --format '{{.Id}}')
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          python scripts/check-package-privacy.py --allow-new
+          python scripts/check-package-privacy.py
           docker tag air-quality:test "$TAG"
           docker push "$TAG"
           python scripts/check-package-privacy.py
@@ -48,6 +48,7 @@ jobs:
           DIGEST=$(docker image inspect "$TAG" --format '{{index .RepoDigests 0}}')
           echo "Verified published image: $DIGEST" >> "$GITHUB_STEP_SUMMARY"
           echo "Local pull: docker pull $DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
 
 
 

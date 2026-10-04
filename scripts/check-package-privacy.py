@@ -24,11 +24,9 @@ package = quote(repo['name'].lower(), safe='')
 try:
     info = get(f'{kind}/{owner}/packages/container/{package}')
 except HTTPError as error:
-    if error.code == 404 and '--allow-new' in sys.argv:
-        print('Package absent or inaccessible; new GHCR packages default to private. Registry push still requires authorization.')
-    else:
-        raise
+    raise SystemExit("Package privacy could not be verified; publishing is disabled") from error
 else:
     if info['visibility'] != 'private':
         raise SystemExit('Refusing to publish: package visibility is not private')
     print('Verified private GHCR package')
+

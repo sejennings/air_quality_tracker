@@ -32,3 +32,5 @@ Remove-Variable registryCredential
 
 Docker Hub sign-in is not required for normal local builds using the public Python base image. Do not change the GHCR package visibility to public. Source secrets, historical data, and notebooks are excluded from the Docker build context.
 
+
+Privacy verification finding: the first real CI push created a public package despite the documented default. The package was deleted by cleanup run 37226316105. Publishing now requires an existing, API-verified private package before any push; absent or inaccessible packages fail closed. A private registry destination and read:packages authentication must be provisioned before further publishing. The container build, all eight tests, and Compose checks passed in run 37226077080; its publishing stage failed the post-push privacy check. Ubuntu deployment remains on hold.
