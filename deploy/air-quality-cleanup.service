@@ -1,0 +1,8 @@
+[Unit]
+Description=Air quality operational retention
+Requires=docker.service
+After=docker.service
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/air-quality-tracker
+ExecStart=/usr/bin/docker compose run --rm pipeline cleanup
