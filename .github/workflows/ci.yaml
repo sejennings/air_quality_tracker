@@ -2,7 +2,7 @@ name: CI and image
 on:
   pull_request:
   push:
-    branches: [main, codex/container-ci]
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
@@ -48,5 +48,6 @@ jobs:
           DIGEST=$(docker image inspect "$TAG" --format '{{index .RepoDigests 0}}')
           echo "Verified published image: $DIGEST" >> "$GITHUB_STEP_SUMMARY"
           echo "Local pull: docker pull $DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
 
 

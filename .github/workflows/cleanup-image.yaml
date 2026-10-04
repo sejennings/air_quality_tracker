@@ -1,0 +1,22 @@
+name: Remove non-private test image
+on:
+  push:
+    branches: [codex/container-ci]
+permissions:
+  contents: read
+  packages: write
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect and remove non-private package created by test
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VISIBILITY=$(gh api users/sejennings/packages/container/air_quality_tracker --jq .visibility)
+          echo "Package visibility: $VISIBILITY"
+          if [ "$VISIBILITY" != private ]; then
+            gh api --method DELETE users/sejennings/packages/container/air_quality_tracker
+            echo 'Removed non-private package'
+          fi
