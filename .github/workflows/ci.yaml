@@ -32,12 +32,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/air-quality-tracker-runtime"
           TAG="$IMAGE:$GITHUB_SHA"
           EXPECTED=$(docker image inspect air-quality:test --format '{{.Id}}')
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          python scripts/check-package-privacy.py
           docker tag air-quality:test "$TAG"
           docker push "$TAG"
+          python scripts/check-package-privacy.py
           docker image rm "$TAG" air-quality:test
           docker pull --platform linux/amd64 "$TAG"
           test "$(docker image inspect "$TAG" --format '{{.Id}}')" = "$EXPECTED"
@@ -46,6 +48,7 @@ jobs:
           DIGEST=$(docker image inspect "$TAG" --format '{{index .RepoDigests 0}}')
           echo "Verified published image: $DIGEST" >> "$GITHUB_STEP_SUMMARY"
           echo "Local pull: docker pull $DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
 
 
 

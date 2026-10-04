@@ -1,21 +1,12 @@
-# Container verification
+# Private container verification
 
-Ubuntu deployment remains on hold. The public portfolio repository uses one GHCR image package; public visibility is accepted by the project owner. A private image with public source is also supported by GHCR, but is not required for this setup.
-
-Build and test locally with Docker Desktop in Linux-container mode:
+The source repository stays public for portfolio viewing. Runtime images use the separate GHCR package `ghcr.io/sejennings/air-quality-tracker-runtime` in the same account; no second source repository is needed. CI refuses to push unless the package already exists and is verified private, and checks again after publishing. A package administrator must grant this repository Actions access to the private package. Package bootstrapping is performed using the owner's authenticated CLI, without embedding credentials in files or the image.
 
 ```powershell
 ./scripts/test-container.ps1
+./scripts/test-container.ps1 -Pull -Image 'ghcr.io/sejennings/air-quality-tracker-runtime@sha256:DIGEST'
 ```
 
-CI builds a Linux amd64 image and tests validation, retention, training, model promotion and scoring using synthetic data. It validates Compose, publishes the same tested image under the commit SHA, pulls it back, compares image IDs and reruns all eight tests. Pull requests never publish. Main pushes, the verification branch and manual runs can publish. No host deployment occurs.
+Local pulls require read:packages credentials stored by Docker Desktop's credential helper. Authentication is sent through standard input, not command arguments. CI uses its short-lived GITHUB_TOKEN. The image excludes `.env`, historical data, notebooks and runtime/model artifacts. Privacy is an access control; secrets must still stay outside image layers and public source.
 
-After a successful workflow run, use its digest from the run summary:
-
-```powershell
-./scripts/test-container.ps1 -Pull -Image 'ghcr.io/sejennings/air_quality_tracker@sha256:DIGEST'
-```
-
-Public GHCR images can be pulled anonymously; Docker Hub authentication is not required for the public Python base image. The image excludes `.env`, datasets, notebooks and runtime/model artifacts. The container runs as a non-root user; tests also exercise a read-only filesystem with writable temporary storage.
-
-The first publishing run failed its private-visibility check; that package was deleted. Publishing resumed after the owner accepted public visibility. All eight tests and Compose validation passed in the first run. See the latest Actions run for current publishing and registry verification results.
+All eight tests passed in both GitHub Actions and the locally pulled image before the private-package migration. The previously public test package must be deleted; the private replacement and registry access must be verified before migration is complete. Ubuntu deployment remains on hold.
