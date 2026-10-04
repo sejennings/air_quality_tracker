@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily air quality scoring
+[Timer]
+OnCalendar=*-*-* 06:00:00
+Persistent=true
+[Install]
+WantedBy=timers.target

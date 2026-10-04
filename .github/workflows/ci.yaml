@@ -1,0 +1,50 @@
+name: CI and image
+on:
+  pull_request:
+  push:
+    branches: [main, codex/container-ci]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build Linux amd64 image
+        run: docker build --platform linux/amd64 --build-arg GIT_COMMIT=${{ github.sha }} -t air-quality:test .
+      - name: Unit and integration tests
+        run: docker run --rm --read-only --tmpfs /tmp:size=512m --entrypoint python -v "$PWD/tests:/tests:ro" air-quality:test -m unittest discover -s /tests -v
+      - name: CLI smoke check
+        run: docker run --rm air-quality:test --help
+      - name: Compose validation
+        run: docker compose config --quiet
+      - name: Publish tested image and verify registry round trip
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/air-quality-tracker-runtime"
+          TAG="$IMAGE:$GITHUB_SHA"
+          EXPECTED=$(docker image inspect air-quality:test --format '{{.Id}}')
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          python scripts/check-package-privacy.py
+          docker tag air-quality:test "$TAG"
+          docker push "$TAG"
+          python scripts/check-package-privacy.py
+          docker image rm "$TAG" air-quality:test
+          docker pull --platform linux/amd64 "$TAG"
+          test "$(docker image inspect "$TAG" --format '{{.Id}}')" = "$EXPECTED"
+          docker run --rm "$TAG" --help
+          docker run --rm --read-only --tmpfs /tmp:size=512m --entrypoint python -v "$PWD/tests:/tests:ro" "$TAG" -m unittest discover -s /tests -v
+          DIGEST=$(docker image inspect "$TAG" --format '{{index .RepoDigests 0}}')
+          echo "Verified published image: $DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          echo "Local pull: docker pull $DIGEST" >> "$GITHUB_STEP_SUMMARY"

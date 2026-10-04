@@ -1,0 +1,9 @@
+[Unit]
+Description=Score daily air quality data
+Requires=docker.service
+After=docker.service
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/air-quality-tracker
+ExecStartPre=/usr/bin/docker compose run --rm pipeline cleanup
+ExecStart=/usr/bin/docker compose run --rm pipeline score --input /data/triangle_pm25_ozone_daily_2021_2025.parquet

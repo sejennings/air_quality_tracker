@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily operational data cleanup
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=60
+[Install]
+WantedBy=timers.target
