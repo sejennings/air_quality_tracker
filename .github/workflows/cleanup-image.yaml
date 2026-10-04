@@ -1,0 +1,20 @@
+name: Remove legacy public test image
+on:
+  push:
+    branches: [codex/container-ci]
+permissions:
+  contents: read
+  packages: write
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove legacy public image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VISIBILITY=$(gh api users/sejennings/packages/container/air_quality_tracker --jq .visibility)
+          test "$VISIBILITY" = public
+          gh api --method DELETE users/sejennings/packages/container/air_quality_tracker
+          echo 'Deleted legacy public image'
