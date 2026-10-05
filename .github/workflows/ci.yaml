@@ -22,6 +22,10 @@ jobs:
         run: docker build --platform linux/amd64 --build-arg GIT_COMMIT=${{ github.sha }} -t air-quality:test .
       - name: Unit and integration tests
         run: docker run --rm --read-only --tmpfs /tmp:size=512m --entrypoint python -v "$PWD/tests:/tests:ro" air-quality:test -m unittest discover -s /tests -v
+      - name: Build and test dashboard
+        run: |
+          docker build --platform linux/amd64 -f dashboard/Dockerfile -t air-quality:dashboard .
+          docker run --rm --read-only --tmpfs /tmp:size=256m --entrypoint python -v "$PWD/dashboard/test_app.py:/tests/test_app.py:ro" air-quality:dashboard /tests/test_app.py
       - name: CLI smoke check
         run: docker run --rm air-quality:test --help
       - name: Compose validation
@@ -34,14 +38,19 @@ jobs:
           set -euo pipefail
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/air-quality-tracker-runtime"
           TAG="$IMAGE:$GITHUB_SHA"
+          DASHBOARD_TAG="$IMAGE:dashboard-$GITHUB_SHA"
           EXPECTED=$(docker image inspect air-quality:test --format '{{.Id}}')
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           python scripts/check-package-privacy.py
           docker tag air-quality:test "$TAG"
           docker push "$TAG"
+          docker tag air-quality:dashboard "$DASHBOARD_TAG"
+          docker push "$DASHBOARD_TAG"
           python scripts/check-package-privacy.py
-          docker image rm "$TAG" air-quality:test
+          docker image rm "$TAG" air-quality:test "$DASHBOARD_TAG" air-quality:dashboard
           docker pull --platform linux/amd64 "$TAG"
+          docker pull --platform linux/amd64 "$DASHBOARD_TAG"
+          docker run --rm --read-only --tmpfs /tmp:size=256m --entrypoint python -v "$PWD/dashboard/test_app.py:/tests/test_app.py:ro" "$DASHBOARD_TAG" /tests/test_app.py
           test "$(docker image inspect "$TAG" --format '{{.Id}}')" = "$EXPECTED"
           docker run --rm "$TAG" --help
           docker run --rm --read-only --tmpfs /tmp:size=512m --entrypoint python -v "$PWD/tests:/tests:ro" "$TAG" -m unittest discover -s /tests -v

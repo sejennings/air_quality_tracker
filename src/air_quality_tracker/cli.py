@@ -48,8 +48,13 @@ def train(args):
     xs = [scaler.transform(group[FEATURES]) for group in groups]
     model = tf.keras.Sequential([tf.keras.layers.Input((4,)), tf.keras.layers.Dense(3, activation="relu"), tf.keras.layers.Dense(2, activation="relu", name="latent_space"), tf.keras.layers.Dense(3, activation="relu"), tf.keras.layers.Dense(4)])
     model.compile(optimizer="adam", loss="mse")
-    history = model.fit(xs[0], xs[0], validation_data=(xs[1], xs[1]), epochs=args.epochs, batch_size=32, shuffle=False, callbacks=[tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=15, restore_best_weights=True)], verbose=2)
-    errors = [np.mean((x - model.predict(x, verbose=0)) ** 2, axis=1) for x in xs]
+    options = tf.data.Options()
+    options.threading.private_threadpool_size = 1
+    datasets = [tf.data.Dataset.from_tensor_slices((x, x)).batch(32).with_options(options) for x in xs[:2]]
+    history = model.fit(datasets[0], validation_data=datasets[1], epochs=args.epochs, batch_size=32, shuffle=False, callbacks=[tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=15, restore_best_weights=True)], verbose=2)
+    errors = [np.mean((x - model(x, training=False).numpy()) ** 2, axis=1) for x in xs]
+    if any(not np.isfinite(error).all() for error in errors):
+        raise ValueError("Nonfinite training or evaluation errors")
     threshold = float(np.percentile(errors[0], 95))
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     bundle = args.models / run_id
@@ -75,7 +80,7 @@ def score(args):
     if frame.empty:
         raise ValueError("No complete observations to score")
     x = joblib.load(bundle / "scaler.joblib").transform(frame[meta["features"]])
-    prediction = tf.keras.models.load_model(bundle / "model.keras").predict(x, verbose=0)
+    prediction = tf.keras.models.load_model(bundle / "model.keras")(x, training=False).numpy()
     errors = np.square(x - prediction)
     frame["reconstruction_error"] = errors.mean(axis=1)
     frame["pm25_reconstruction_error"] = errors[:, meta["features"].index("pm25")]
