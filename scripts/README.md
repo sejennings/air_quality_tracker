@@ -9,5 +9,5 @@ The source repository stays public for portfolio viewing. Runtime images use the
 
 Local pulls require read:packages credentials stored by Docker Desktop's credential helper. Authentication is sent through standard input, not command arguments. CI uses its short-lived GITHUB_TOKEN. The image excludes `.env`, historical data, notebooks and runtime/model artifacts. Privacy is an access control; secrets must still stay outside image layers and public source.
 
-All eight tests passed in both GitHub Actions and the locally pulled image before the private-package migration. The previously public test package has been deleted. The private replacement has been verified via the package API; anonymous pulls return 401, and authenticated local pulls pass all eight tests. CI also verifies private visibility before and after publishing. Ubuntu deployment remains on hold.
+The current suite has 16 pipeline tests and a dashboard render test, including reconstruction metrics and historical flag filtering. CI runs these before publishing and again after pulling the private images. The previously public test package has been deleted. The private replacement has been verified via the package API; anonymous pulls return 401. CI verifies private visibility before and after publishing. Ubuntu deployment remains on hold.
 

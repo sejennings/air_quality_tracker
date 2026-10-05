@@ -39,14 +39,14 @@ class PipelineTests(unittest.TestCase):
             dates = pd.date_range('2023-12-27', periods=12).append(pd.date_range('2025-01-01', periods=4))
             pd.DataFrame({'date': dates, 'pm25': range(1, 17), 'ozone_8hr_max': [0.03] * 16}).to_parquet(source)
             prefix = ['air-quality', '--models', str(root / 'models'), '--operational', str(root / 'operational')]
-            with patch('sys.argv', prefix + ['train', '--input', str(source), '--epochs', '1']):
+            with patch('sys.argv', prefix + ['train', '--input', str(source), '--epochs', '3']):
                 main()
             bundle = next((root / 'models').iterdir())
             import json, joblib
             meta = json.loads((bundle / 'metadata.json').read_text())
             self.assertEqual({k: v['rows'] for k, v in meta['metrics'].items()}, {'train': 5, 'validation': 7, 'test': 4})
             self.assertAlmostEqual(joblib.load(bundle / 'scaler.joblib').mean_[0], 3.0)
-            self.assertEqual(len(meta['history']['loss']), 1)
+            self.assertEqual(len(meta['history']['loss']), 3)
             self.assertFalse((root / 'models' / 'active.json').exists())
             with patch('sys.argv', prefix + ['promote', bundle.name]):
                 main()
@@ -55,6 +55,11 @@ class PipelineTests(unittest.TestCase):
             result = pd.read_parquet(next((root / 'operational' / 'scores').iterdir()))
             self.assertEqual(len(result), 16)
             self.assertTrue(result.model_version.eq(bundle.name).all())
+            import numpy as np
+            scaler = joblib.load(bundle / 'scaler.joblib')
+            self.assertTrue(np.allclose(result.pm25_reconstruction_error, ((result.pm25 - result.pm25_reconstructed) / scaler.scale_[0]) ** 2, atol=1e-5))
+            self.assertTrue(np.allclose(result.ozone_reconstruction_error, ((result.ozone_8hr_max - result.ozone_reconstructed) / scaler.scale_[1]) ** 2, atol=1e-5))
+            self.assertTrue(result.anomaly.eq(result.reconstruction_error > result.anomaly_threshold).all())
 
 
 
@@ -103,5 +108,3 @@ class PromotionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'incomplete'):
                     main()
             self.assertEqual(json.loads(active.read_text())['run_id'], 'original')
-
-
