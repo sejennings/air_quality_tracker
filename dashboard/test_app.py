@@ -4,6 +4,9 @@ import os
 from datetime import datetime, timezone
 from io import BytesIO
 import unittest
+import sys
+sys.path.insert(0, '/app')
+from evaluation import evaluate
 from unittest.mock import patch
 import pandas as pd
 from streamlit.testing.v1 import AppTest
@@ -50,17 +53,33 @@ class DashboardTest(unittest.TestCase):
             self.assertEqual(app.metric[0].value, '1')
             self.assertEqual(app.metric[1].value, '0')
             self.assertTrue(any('Dense autoencoder' in heading.value for heading in app.subheader))
-            decisions = next(table.value for table in app.dataframe if 'Model decision' in table.value.columns)
+            decisions = [table.value for table in app.dataframe if 'Model decision' in table.value.columns][-1]
             self.assertEqual(decisions['Model decision'].tolist(), ['Flagged'])
-            self.assertEqual(decisions['Verified event'].tolist(), ['Not labeled'])
+            self.assertEqual(decisions['Observed rule'].tolist(), ['Below concentration limits'])
             errors = next(table.value for table in app.dataframe if 'MAE' in table.value.columns)
             self.assertEqual(errors['MAE'].tolist(), [2., 3.])
             self.assertEqual(errors['RMSE'].tolist(), [2., 3.])
-            self.assertTrue(any(metric.label == 'Detection accuracy' and metric.value == 'Not available' for metric in app.metric))
+            self.assertTrue(any(metric.label == 'Accuracy' and metric.value == '100.0%' for metric in app.metric))
             app.checkbox[0].uncheck().run()
             self.assertEqual(len(app.exception), 0)
-            decisions = next(table.value for table in app.dataframe if 'Model decision' in table.value.columns)
+            decisions = [table.value for table in app.dataframe if 'Model decision' in table.value.columns][-1]
             self.assertEqual(decisions['Model decision'].tolist(), ['Flagged', 'Not flagged'])
+
+    def test_independent_rule_and_confusion_counts(self):
+        frame = pd.DataFrame({'pm25': [35.5, 1., 36., 1.], 'ozone_8hr_max': [10., 71., 10., 10.], 'pm25_reconstructed': [36., 1., 1., 36.], 'ozone_reconstructed': [10., 10., 10., 10.], 'anomaly': [True, False, False, True]})
+        result, counts = evaluate(frame, 35.5, 71., reconstructed=True)
+        self.assertEqual(result['Observed exceedance'].tolist(), [True, True, True, False])
+        self.assertEqual(result.Outcome.tolist(), ['Correctly flagged', 'Missed day', 'Missed day', 'False alarm'])
+        self.assertEqual(counts['Accuracy'], .25)
+        self.assertEqual(counts['Precision'], .5)
+        self.assertAlmostEqual(counts['Recall'], 1/3)
+        changed = frame.copy()
+        changed['anomaly'] = ~changed.anomaly
+        second, _ = evaluate(changed, 35.5, 71.)
+        self.assertTrue(result['Observed exceedance'].equals(second['Observed exceedance']))
+        _, no_events = evaluate(frame.iloc[[3]], 100., 100., reconstructed=True)
+        self.assertIsNone(no_events['Recall'])
+        self.assertIsNone(no_events['Precision'])
 
 
 if __name__ == '__main__':
