@@ -55,6 +55,11 @@ class PipelineTests(unittest.TestCase):
             result = pd.read_parquet(next((root / 'operational' / 'scores').iterdir()))
             self.assertEqual(len(result), 16)
             self.assertTrue(result.model_version.eq(bundle.name).all())
+            import numpy as np
+            scaler = joblib.load(bundle / 'scaler.joblib')
+            self.assertTrue(np.allclose(result.pm25_reconstruction_error, ((result.pm25 - result.pm25_reconstructed) / scaler.scale_[0]) ** 2, atol=1e-5))
+            self.assertTrue(np.allclose(result.ozone_reconstruction_error, ((result.ozone_8hr_max - result.ozone_reconstructed) / scaler.scale_[1]) ** 2, atol=1e-5))
+            self.assertTrue(result.anomaly.eq(result.reconstruction_error > result.anomaly_threshold).all())
 
 
 

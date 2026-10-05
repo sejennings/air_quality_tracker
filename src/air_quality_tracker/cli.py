@@ -79,13 +79,20 @@ def score(args):
     frame = inputs(args.input)
     if frame.empty:
         raise ValueError("No complete observations to score")
-    x = joblib.load(bundle / "scaler.joblib").transform(frame[meta["features"]])
+    scaler = joblib.load(bundle / "scaler.joblib")
+    x = scaler.transform(frame[meta["features"]])
     prediction = tf.keras.models.load_model(bundle / "model.keras")(x, training=False).numpy()
+    if not np.isfinite(prediction).all():
+        raise ValueError("Nonfinite model reconstruction")
+    reconstructed = scaler.inverse_transform(prediction)
+    frame["pm25_reconstructed"] = reconstructed[:, meta["features"].index("pm25")]
+    frame["ozone_reconstructed"] = reconstructed[:, meta["features"].index("ozone_8hr_max")]
     errors = np.square(x - prediction)
     frame["reconstruction_error"] = errors.mean(axis=1)
     frame["pm25_reconstruction_error"] = errors[:, meta["features"].index("pm25")]
     frame["ozone_reconstruction_error"] = errors[:, meta["features"].index("ozone_8hr_max")]
     frame["anomaly"] = frame.reconstruction_error > meta["threshold"]
+    frame["anomaly_threshold"] = meta["threshold"]
     frame["model_version"] = meta["run_id"]
     out = args.operational / "scores"
     out.mkdir(parents=True, exist_ok=True)

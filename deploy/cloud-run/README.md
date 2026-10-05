@@ -1,6 +1,10 @@
-# Cloud Run Jobs deployment preparation
+# Cloud Run Jobs deployment
 
-Status: the one-off validation job is deployed and verified successful. Training, scoring, cleanup scheduling and cloud deployment CI are not yet deployed. Suggested region: us-east1. Ubuntu deployment stays on hold.
+Status: validation, initial training, weekly scoring, daily cleanup and the public dashboard are deployed in us-east1. GitHub Actions tests and publishes private images; Google deployment uses the scripts here. Automated deployment through Workload Identity Federation is a future step. Ubuntu deployment stays on hold.
+
+Public dashboard: https://air-quality-dashboard-236256523935.us-east1.run.app
+
+The first weekly run scored all seven days of September 28–October 4, 2026. Weekly scoring runs Monday at 08:00 America/New_York for the previous Monday–Sunday. Cleanup runs daily at 05:00. The retained model was trained once; weekly scoring does not retrain it.
 
 ## Runtime layout
 
@@ -8,7 +12,7 @@ Use private Artifact Registry for the already-tested Linux amd64 container. Copy
 
 Create separate private Cloud Storage buckets for historical input, model bundles and operational results. Historical data and model bundles are retained. Apply operational-lifecycle.json only to the operational bucket, not the historical or model buckets. Disable operational bucket soft delete and versioning if deleted data must not remain recoverable beyond the retention window. Lifecycle processing is asynchronous, so age 30 is not a strict instantaneous deletion deadline. Logs need a separate Cloud Logging retention setting; bucket lifecycle does not expire logs.
 
-The current CLI expects local files and uses rename to promote active models. Cloud Storage mounts do not provide the full local filesystem semantics required for safe promotion. Before deployment, add a storage adapter that downloads inputs and the active model to execution-local scratch space, trains/scores locally, and uploads completed bundles/results through the Storage API. Publish the active-model pointer using a generation precondition to prevent competing promotions. Do not directly mount the bucket and assume rename is atomic.
+The cloud adapter downloads inputs and models into execution-local scratch space and uploads complete outputs through the Storage API. Initial active-model pointer creation uses a generation precondition. Object-generation leases prevent overlapping job execution. Local CLI promotion still uses local rename; cloud jobs do not rely on mounted-bucket rename semantics.
 
 ## Jobs
 
@@ -29,7 +33,7 @@ Use GitHub Actions Workload Identity Federation for deployment, bound to this re
 
 ## Before resource creation
 
-Confirm project ID, enabled billing and region. Install/authenticate the Google Cloud CLI, inspect existing project resources, then produce the concrete IAM, storage and job configuration. Run a one-off validation before enabling training/scoring schedules. Nothing in this directory provisions cloud resources yet.
+The scripts provision cloud resources and require authenticated Google Cloud CLI access, enabled project billing and a tested immutable image digest. Validation and initial scoring passed before the schedules were enabled.
 
 ## Selected project and first deployment
 
@@ -57,3 +61,9 @@ Cloud writes use the Storage API, with execution-local scratch files. A generati
 The dashboard exposes recent real-week scores and clearly labeled historical 2025 test results, plus training and validation loss curves, anomaly thresholds and split metrics. Reconstruction metrics are not labeled detection accuracy or health-risk predictions. Operational records and historical test score exports age out after 30 days; the active model's training metrics remain available.
 
 AirNow format reference: https://docs.airnowapi.org/docs/DailyDataFactSheet.pdf
+
+## Historical decisions and concentration comparisons
+
+The Historical flags tab defaults to flagged days in the held-out 2025 period and can display all days. Each row distinguishes the model decision from an independently verified event label (currently unavailable). Scoring saves inverse-scaled PM2.5 and ozone reconstructions, the per-result anomaly threshold and standardized reconstruction errors. Dashboard comparisons show observed/reconstructed concentrations and MAE, RMSE and mean bias in pollutant units for the selected days. These are same-day reconstructions, not forecasts or labeled anomaly-detection accuracy. Flagged-only errors are selected by the model's error threshold and are not an independent evaluation set.
+
+`refresh-score-artifacts.ps1 -Image <tested-digest>` refreshes retained score files with the existing active model, without training or promotion. It stages private data under ignored runtime scratch storage and removes it afterward. Refreshing replaces operational objects and starts their 30-day creation-age retention again; use this as a one-off schema migration, not a schedule. `mirror-images.ps1 -Revision <tested-commit>` copies the two private tested images into Artifact Registry using ephemeral credentials.

@@ -22,7 +22,8 @@ foreach ($bucket in @($models, $operational)) {
         Invoke-Gcloud storage buckets create "gs://$bucket" --project=$Project --location=$Region --uniform-bucket-level-access --public-access-prevention --quiet
     }
 }
-Invoke-Gcloud storage buckets update "gs://$operational" --clear-soft-delete --no-versioning --lifecycle-file=(Join-Path $PSScriptRoot 'operational-lifecycle.json') --quiet
+$lifecycleFile = Join-Path $PSScriptRoot 'operational-lifecycle.json'
+Invoke-Gcloud storage buckets update "gs://$operational" --clear-soft-delete --no-versioning "--lifecycle-file=$lifecycleFile" --quiet
 Invoke-Gcloud logging buckets update _Default --location=global --retention-days=30 --project=$Project --quiet
 $names = @('air-quality-bootstrap','air-quality-weekly','air-quality-cleanup','air-quality-dashboard','air-quality-scheduler')
 $accounts = Invoke-Gcloud iam service-accounts list --project=$Project --format='value(email)'

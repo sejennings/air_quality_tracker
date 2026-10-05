@@ -50,7 +50,36 @@ except Exception:
     st.info("The first model and score artifacts are being prepared. Check back after the initial training job finishes.")
     st.stop()
 
-weekly_tab, model_tab = st.tabs(["Observations & scores", "Model & training"])
+def reconstruction_comparison(frame, key):
+    st.subheader("Observed versus model reconstruction")
+    st.caption("Same-day reconstruction, not a forecast. Errors below are in pollutant units; smaller values mean a closer reconstruction, not better anomaly detection. Flagged days are selected using error, so their errors will generally be larger.")
+    required = {"pm25_reconstructed", "ozone_reconstructed"}
+    if not required.issubset(frame.columns):
+        st.info("Reconstruction concentrations will appear after these scores are refreshed.")
+        return
+    if frame.empty:
+        st.info("No days match this selection.")
+        return
+    rows = []
+    for label, actual, reconstructed, unit in [("PM2.5", "pm25", "pm25_reconstructed", "µg/m³"), ("Ozone", "ozone_8hr_max", "ozone_reconstructed", "ppb")]:
+        error = frame[actual] - frame[reconstructed]
+        rows.append({"Pollutant": label, "Days": len(frame), "MAE": error.abs().mean(), "RMSE": (error.pow(2).mean()) ** .5, "Mean bias (reconstructed − observed)": -error.mean(), "Units": unit})
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    left, right = st.columns(2)
+    with left:
+        st.write("**PM2.5 · observed and reconstructed**")
+        st.line_chart(frame.set_index("date")[["pm25", "pm25_reconstructed"]].rename(columns={"pm25": "Observed", "pm25_reconstructed": "Reconstructed"}), color=["#0f766e", "#db7846"])
+    with right:
+        st.write("**Ozone · observed and reconstructed**")
+        st.line_chart(frame.set_index("date")[["ozone_8hr_max", "ozone_reconstructed"]].rename(columns={"ozone_8hr_max": "Observed", "ozone_reconstructed": "Reconstructed"}), color=["#597aab", "#db7846"])
+    comparison = frame[["date", "pm25", "pm25_reconstructed", "ozone_8hr_max", "ozone_reconstructed", "reconstruction_error", "anomaly_threshold", "anomaly"]].copy()
+    comparison["PM2.5 absolute error (µg/m³)"] = (frame.pm25 - frame.pm25_reconstructed).abs()
+    comparison["Ozone absolute error (ppb)"] = (frame.ozone_8hr_max - frame.ozone_reconstructed).abs()
+    st.dataframe(comparison, hide_index=True, width="stretch")
+    st.download_button("Download concentration comparison", comparison.to_csv(index=False), file_name="concentration-comparison.csv", mime="text/csv", key=key)
+
+
+weekly_tab, historical_tab, model_tab = st.tabs(["Observations & scores", "Historical flags", "Model & training"])
 with weekly_tab:
     if reports:
         latest = reports[0]
@@ -90,6 +119,31 @@ with weekly_tab:
         st.subheader("Daily results")
         st.dataframe(shown[columns], hide_index=True, width="stretch")
         st.download_button("Download displayed scores", shown[columns].to_csv(index=False), file_name="air-quality-scores.csv", mime="text/csv")
+        reconstruction_comparison(shown, "weekly-comparison")
+
+with historical_tab:
+    st.subheader("Historical days flagged by the model")
+    st.write("Compare the model's decisions across the held-out 2025 test period. A model flag means reconstruction error exceeded its threshold; it does not confirm a real pollution event.")
+    historical = data[data.result_type == "Historical test (2025)"].sort_values("date") if not data.empty else pd.DataFrame()
+    if historical.empty:
+        st.info("Historical test scores are unavailable or have expired under the 30-day operational retention policy.")
+    else:
+        historical = historical.drop_duplicates(["date", "model_version"], keep="last").copy()
+        historical["Model decision"] = historical.anomaly.map({True: "Flagged", False: "Not flagged"})
+        historical["Verified event"] = "Not labeled"
+        flagged = historical[historical.anomaly]
+        cols = st.columns(3)
+        cols[0].metric("Historical days scored", len(historical))
+        cols[1].metric("Historical model flags", len(flagged))
+        cols[2].metric("Detection accuracy", "Not available")
+        st.info("These data have no independent event labels. True positives, false alarms, precision, recall and accuracy cannot be calculated yet. The flagged percentage is not accuracy.")
+        st.bar_chart(historical.set_index("date")[["anomaly"]].astype(int).rename(columns={"anomaly": "Model flag (1 = flagged)"}), color="#db7846")
+        only_flagged = st.checkbox("Show flagged days only", value=True)
+        displayed = flagged if only_flagged else historical
+        columns = ["date", "Model decision", "Verified event", "reconstruction_error", "pm25", "ozone_8hr_max", "model_version"]
+        st.dataframe(displayed[columns], hide_index=True, width="stretch")
+        st.download_button("Download historical decisions", displayed[columns].to_csv(index=False), file_name="historical-model-decisions.csv", mime="text/csv")
+        reconstruction_comparison(displayed, "historical-comparison")
 
 with model_tab:
     st.subheader("Dense autoencoder baseline")
