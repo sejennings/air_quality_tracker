@@ -32,7 +32,7 @@ $condition = "assertion.repository_id == '1377518824' && assertion.repository_ow
 Cloud iam workload-identity-pools providers $operation github --workload-identity-pool=$pool --project=$Project --location=global --issuer-uri=https://token.actions.githubusercontent.com --attribute-mapping='google.subject=assertion.sub,attribute.repository_id=assertion.repository_id' --attribute-condition=$condition --quiet
 $projectNumber = Cloud projects describe $Project --format='value(projectNumber)'
 Cloud iam service-accounts add-iam-policy-binding $account --project=$Project --role=roles/iam.workloadIdentityUser --member="principalSet://iam.googleapis.com/projects/$projectNumber/locations/global/workloadIdentityPools/$pool/attribute.repository_id/1377518824" --quiet
-$permissions = 'run.jobs.get,run.jobs.update,run.services.get,run.services.update,run.operations.get,run.operations.list,cloudscheduler.jobs.get,cloudscheduler.jobs.update,resourcemanager.projects.get,serviceusage.services.use'
+$permissions = 'run.jobs.get,run.jobs.update,run.services.get,run.services.update,run.operations.get,run.operations.list,cloudscheduler.jobs.get,cloudscheduler.jobs.fullView,cloudscheduler.jobs.update,resourcemanager.projects.get,serviceusage.services.use'
 $roles = Cloud iam roles list --project=$Project --format='value(name)'
 $roleOperation = if ($roles -match '/airQualityRuntimeDeployer$') { 'update' } else { 'create' }
 Cloud iam roles $roleOperation airQualityRuntimeDeployer --project=$Project --title='Air Quality Runtime Deployer' --permissions=$permissions --stage=GA --quiet
