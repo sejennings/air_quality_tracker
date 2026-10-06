@@ -3,6 +3,7 @@ WORKDIR /app
 COPY dashboard/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt && useradd --uid 10001 --create-home app
 COPY dashboard/app.py ./app.py
+COPY dashboard/evaluation.py ./evaluation.py
 COPY dashboard/.streamlit ./.streamlit
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 USER 10001:10001

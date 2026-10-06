@@ -8,11 +8,25 @@ permissions:
   contents: read
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: 1.14.3
+      - run: terraform -chdir=deploy/terraform fmt -check
+      - run: terraform -chdir=deploy/terraform init -backend=false -lockfile=readonly
+      - run: terraform -chdir=deploy/terraform validate
+      - run: python deploy/terraform/test_plan.py
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      pipeline_digest: ${{ steps.publish.outputs.pipeline_digest }}
+      dashboard_digest: ${{ steps.publish.outputs.dashboard_digest }}
     permissions:
       contents: read
       packages: write
@@ -31,6 +45,7 @@ jobs:
       - name: Compose validation
         run: docker compose config --quiet
       - name: Publish tested image and verify registry round trip
+        id: publish
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -55,5 +70,73 @@ jobs:
           docker run --rm "$TAG" --help
           docker run --rm --read-only --tmpfs /tmp:size=512m --entrypoint python -v "$PWD/tests:/tests:ro" "$TAG" -m unittest discover -s /tests -v
           DIGEST=$(docker image inspect "$TAG" --format '{{index .RepoDigests 0}}')
+          echo "pipeline_digest=${DIGEST#*@}" >> "$GITHUB_OUTPUT"
+          DASHBOARD_DIGEST=$(docker image inspect "$DASHBOARD_TAG" --format '{{index .RepoDigests 0}}')
+          echo "dashboard_digest=${DASHBOARD_DIGEST#*@}" >> "$GITHUB_OUTPUT"
           echo "Verified published image: $DIGEST" >> "$GITHUB_STEP_SUMMARY"
           echo "Local pull: docker pull $DIGEST" >> "$GITHUB_STEP_SUMMARY"
+  deploy:
+    needs: [test, terraform]
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/container-ci')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    concurrency:
+      group: google-cloud-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Authenticate with short-lived Google credentials
+        id: google
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          token_format: access_token
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: 1.14.3
+          terraform_wrapper: false
+      - name: Mirror the verified image digests into private Artifact Registry
+        env:
+          AIR_SOURCE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AIR_DEST_TOKEN: ${{ steps.google.outputs.access_token }}
+          SOURCE_OWNER: ${{ github.repository_owner }}
+          PIPELINE_DIGEST: ${{ needs.test.outputs.pipeline_digest }}
+          DASHBOARD_DIGEST: ${{ needs.test.outputs.dashboard_digest }}
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint /busybox/sh \
+            -e AIR_SOURCE_TOKEN -e AIR_DEST_TOKEN -e SOURCE_OWNER -e PIPELINE_DIGEST -e DASHBOARD_DIGEST -e GITHUB_SHA \
+            gcr.io/go-containerregistry/crane@sha256:e78770b31258a3846f878036d9c1f63fbe4c871f9f56990bf77fd95c013e3c1b -c '
+              set -eu
+              printf "%s" "$AIR_SOURCE_TOKEN" | crane auth login ghcr.io -u "$SOURCE_OWNER" --password-stdin
+              printf "%s" "$AIR_DEST_TOKEN" | crane auth login us-east1-docker.pkg.dev -u oauth2accesstoken --password-stdin
+              source="ghcr.io/$SOURCE_OWNER/air-quality-tracker-runtime"
+              destination="us-east1-docker.pkg.dev/air-quality-tracker-510721/air-quality"
+              crane copy "$source@$PIPELINE_DIGEST" "$destination/pipeline:$GITHUB_SHA"
+              crane copy "$source@$DASHBOARD_DIGEST" "$destination/dashboard:$GITHUB_SHA"
+              test "$(crane digest "$destination/pipeline:$GITHUB_SHA")" = "$PIPELINE_DIGEST"
+              test "$(crane digest "$destination/dashboard:$GITHUB_SHA")" = "$DASHBOARD_DIGEST"
+            '
+      - name: Terraform plan and apply the tested configuration
+        env:
+          TF_IN_AUTOMATION: "true"
+          TF_VAR_pipeline_image: us-east1-docker.pkg.dev/air-quality-tracker-510721/air-quality/pipeline@${{ needs.test.outputs.pipeline_digest }}
+          TF_VAR_dashboard_image: us-east1-docker.pkg.dev/air-quality-tracker-510721/air-quality/dashboard@${{ needs.test.outputs.dashboard_digest }}
+          TF_VAR_revision: ${{ github.sha }}
+          STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: |
+          set -euo pipefail
+          terraform -chdir=deploy/terraform init -input=false -lockfile=readonly -backend-config="bucket=$STATE_BUCKET" -backend-config="prefix=production/runtime"
+          terraform -chdir=deploy/terraform plan -input=false -lock-timeout=5m -out=deployment.tfplan > "$RUNNER_TEMP/terraform-plan.log"
+          terraform -chdir=deploy/terraform show -json deployment.tfplan | python scripts/check-terraform-plan.py
+          terraform -chdir=deploy/terraform apply -input=false deployment.tfplan
+          terraform -chdir=deploy/terraform output -raw dashboard_url >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove ephemeral plan and credentials
+        if: always()
+        run: rm -f deploy/terraform/deployment.tfplan "$RUNNER_TEMP/terraform-plan.log" gha-creds-*.json

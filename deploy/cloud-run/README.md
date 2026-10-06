@@ -1,6 +1,6 @@
 # Cloud Run Jobs deployment
 
-Status: validation, initial training, weekly scoring, daily cleanup and the public dashboard are deployed in us-east1. GitHub Actions tests and publishes private images; Google deployment uses the scripts here. Automated deployment through Workload Identity Federation is a future step. Ubuntu deployment stays on hold.
+Status: validation, initial training, weekly scoring, daily cleanup and the public dashboard are deployed in us-east1. GitHub Actions tests and publishes private images, then uses Workload Identity Federation and [Terraform](../terraform/README.md) to update Cloud Run and Scheduler. The direct runtime deployment scripts here are legacy migration tools; avoid using them for Terraform-managed resources. Ubuntu deployment stays on hold.
 
 Public dashboard: https://air-quality-dashboard-236256523935.us-east1.run.app
 
@@ -63,6 +63,8 @@ The dashboard exposes recent real-week scores and clearly labeled historical 202
 AirNow format reference: https://docs.airnowapi.org/docs/DailyDataFactSheet.pdf
 
 ## Historical decisions and concentration comparisons
+
+The dashboard also computes an independent observed-exceedance reference from regional concentrations, defaulting to PM2.5 >=35.5 ug/m3 or ozone >=71 ppb. These defaults come from the start of EPA's Unhealthy for Sensitive Groups AQI concentration category; applying them to regional averages is a benchmark, not an official AQI calculation. Users can compare either reconstructed concentration exceedances (the same limits applied to outputs) or the existing autoencoder flags against that observed reference. Counts, accuracy, precision, recall and every daily outcome are displayed for the entire held-out test set. Undefined precision/recall are shown explicitly; no observed positives triggers a warning. Limits are configurable and should be selected independently of evaluation performance.
 
 The Historical flags tab defaults to flagged days in the held-out 2025 period and can display all days. Each row distinguishes the model decision from an independently verified event label (currently unavailable). Scoring saves inverse-scaled PM2.5 and ozone reconstructions, the per-result anomaly threshold and standardized reconstruction errors. Dashboard comparisons show observed/reconstructed concentrations and MAE, RMSE and mean bias in pollutant units for the selected days. These are same-day reconstructions, not forecasts or labeled anomaly-detection accuracy. Flagged-only errors are selected by the model's error threshold and are not an independent evaluation set.
 

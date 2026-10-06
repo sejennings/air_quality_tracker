@@ -6,6 +6,7 @@ import os
 import pandas as pd
 import streamlit as st
 from google.cloud import storage
+from evaluation import evaluate
 
 st.set_page_config(page_title="Triangle Air Quality", page_icon="🌿", layout="wide")
 st.markdown("""<style>
@@ -130,17 +131,43 @@ with historical_tab:
     else:
         historical = historical.drop_duplicates(["date", "model_version"], keep="last").copy()
         historical["Model decision"] = historical.anomaly.map({True: "Flagged", False: "Not flagged"})
-        historical["Verified event"] = "Not labeled"
+        st.subheader("Accuracy against observed concentration thresholds")
+        st.write("An observed exceedance day has PM2.5 or ozone at or above the limits below. This reference is calculated from observed concentrations, independently of reconstruction error. Regional averages provide a comparison benchmark, not an official station AQI or verified event record.")
+        left, right = st.columns(2)
+        pm_limit = left.number_input("Observed PM2.5 limit (µg/m³)", min_value=0.1, value=35.5, step=0.1)
+        ozone_limit = right.number_input("Observed ozone limit (ppb)", min_value=1.0, value=71.0, step=1.0)
+        st.caption("Defaults use the concentration breakpoints at the start of EPA's Unhealthy for Sensitive Groups AQI category. Limits apply directly to our regional daily values; this is not an AQI calculation. Choose limits before interpreting performance, rather than adjusting them to improve scores.")
+        st.markdown("[EPA concentration breakpoint reference](https://document.airnow.gov/technical-assistance-document-for-the-reporting-of-daily-air-quailty.pdf)")
+        available = ["Model anomaly flags"]
+        if {"pm25_reconstructed", "ozone_reconstructed"}.issubset(historical.columns):
+            available.insert(0, "Reconstructed concentration exceedances")
+        method = st.selectbox("Decision to compare with observed exceedances", available)
+        historical, counts = evaluate(historical, pm_limit, ozone_limit, reconstructed=method.startswith("Reconstructed"))
+        st.caption("Reconstructed concentration decisions apply the same concentration limits to model outputs. Model anomaly flags use the existing reconstruction-error threshold. Both are compared with the independently calculated observed exceedance rule.")
+        outcomes = st.columns(4)
+        for column, label in zip(outcomes, ["Correctly flagged", "Missed days", "False alarms", "Correctly unflagged"]):
+            column.metric(label, counts[label])
+        measures = st.columns(3)
+        for column, label in zip(measures, ["Accuracy", "Precision", "Recall"]):
+            value = counts[label]
+            column.metric(label, f"{value:.1%}" if value is not None else "Undefined")
+        st.write(f"Observed exceedance days: **{counts['Observed exceedance days']} of {len(historical)}**. Accuracy includes correctly unflagged days; precision measures how many flags matched exceedances, and recall measures how many observed exceedances were detected.")
+        if counts['Observed exceedance days'] == 0:
+            st.warning("No observed days exceed these limits. Recall is undefined, and high accuracy here does not demonstrate detection of exceedance events.")
+        historical["Observed rule"] = historical['Observed exceedance'].map({True: "Observed exceedance", False: "Below concentration limits"})
         flagged = historical[historical.anomaly]
-        cols = st.columns(3)
+        cols = st.columns(2)
         cols[0].metric("Historical days scored", len(historical))
         cols[1].metric("Historical model flags", len(flagged))
-        cols[2].metric("Detection accuracy", "Not available")
-        st.info("These data have no independent event labels. True positives, false alarms, precision, recall and accuracy cannot be calculated yet. The flagged percentage is not accuracy.")
         st.bar_chart(historical.set_index("date")[["anomaly"]].astype(int).rename(columns={"anomaly": "Model flag (1 = flagged)"}), color="#db7846")
         only_flagged = st.checkbox("Show flagged days only", value=True)
         displayed = flagged if only_flagged else historical
-        columns = ["date", "Model decision", "Verified event", "reconstruction_error", "pm25", "ozone_8hr_max", "model_version"]
+        columns = ["date", "Model decision", "Observed rule", "Compared decision", "Outcome", "reconstruction_error", "pm25", "ozone_8hr_max", "model_version"]
+        st.subheader("All daily comparison outcomes")
+        outcome_filter = st.selectbox("Filter comparison outcomes", ["All days", "Correctly flagged", "Missed day", "False alarm", "Correctly unflagged"])
+        comparison_days = historical if outcome_filter == "All days" else historical[historical.Outcome == outcome_filter]
+        st.dataframe(comparison_days[columns], hide_index=True, width="stretch")
+        st.download_button("Download threshold evaluation", comparison_days[columns].to_csv(index=False), file_name="threshold-evaluation.csv", mime="text/csv")
         st.dataframe(displayed[columns], hide_index=True, width="stretch")
         st.download_button("Download historical decisions", displayed[columns].to_csv(index=False), file_name="historical-model-decisions.csv", mime="text/csv")
         reconstruction_comparison(displayed, "historical-comparison")
@@ -158,7 +185,7 @@ with model_tab:
     history.index.name = "Epoch"
     st.line_chart(history, color=["#0f766e", "#597aab"])
     st.caption(f"Seed {meta['seed']} · early stopping with restored best weights · threshold {meta['threshold']:.4f} (95th percentile of training errors)")
-    st.info("Reconstruction loss and flagged fractions describe this model's behavior. Detection accuracy requires labeled events; a low loss alone does not prove useful anomaly detection.")
+    st.info("Historical flags reports accuracy, precision and recall against an independent observed-concentration rule. Reconstruction loss measures concentration reconstruction quality. The concentration benchmark does not label every kind of unusual seasonal or pollution event.")
     st.markdown(f"[Source repository](https://github.com/sejennings/air_quality_tracker) · Code revision `{meta.get('git_commit', 'unknown')[:12]}`")
 st.divider()
 st.caption("Operational results expire after 30 days. Historical training data and the active model are retained. Public dashboard · private artifact storage.")

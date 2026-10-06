@@ -5,3 +5,8 @@ runtime
 notebooks
 .venv
 __pycache__
+gha-creds-*.json
+.terraform
+*.tfstate*
+*.tfplan
+*.tfvars
