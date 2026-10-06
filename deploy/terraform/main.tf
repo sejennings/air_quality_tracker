@@ -87,7 +87,8 @@ resource "google_cloud_scheduler_job" "pipeline" {
     uri         = "https://run.googleapis.com/v2/projects/${var.project}/locations/${var.region}/jobs/${google_cloud_run_v2_job.pipeline[each.key].name}:run"
     http_method = "POST"
     body        = base64encode("{}")
-    headers     = { "Content-Type" = "application/json", "User-Agent" = "Google-Cloud-Scheduler" }
+    # Scheduler owns User-Agent and omits it from reads; declaring it causes drift.
+    headers = { "Content-Type" = "application/json" }
     oauth_token {
       service_account_email = "air-quality-scheduler@${var.project}.iam.gserviceaccount.com"
       scope                 = "https://www.googleapis.com/auth/cloud-platform"
