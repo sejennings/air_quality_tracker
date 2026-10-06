@@ -25,7 +25,10 @@ $providers = Cloud iam workload-identity-pools providers list --workload-identit
 $operation = if ($providers -match '/github$') { 'update-oidc' } else { 'create-oidc' }
 # Numeric IDs prevent a renamed/deleted repository being impersonated. Trust only
 # this workflow, these existing branches, and push/manual runs in production.
-$condition = "assertion.repository_id == '1377518824' && assertion.repository_owner_id == '89467945' && assertion.ref in ['refs/heads/main', 'refs/heads/codex/container-ci'] && assertion.event_name in ['push', 'workflow_dispatch'] && assertion.sub == 'repo:sejennings/air_quality_tracker:environment:production' && assertion.workflow_ref in ['sejennings/air_quality_tracker/.github/workflows/ci.yaml@refs/heads/main', 'sejennings/air_quality_tracker/.github/workflows/ci.yaml@refs/heads/codex/container-ci']"
+$subjectConfig = gh api repos/sejennings/air_quality_tracker/actions/oidc/customization/sub | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the repository OIDC subject configuration.' }
+$subjectPrefix = if ($subjectConfig.sub_claim_prefix) { $subjectConfig.sub_claim_prefix } else { 'repo:sejennings/air_quality_tracker' }
+$condition = "assertion.repository_id == '1377518824' && assertion.repository_owner_id == '89467945' && assertion.ref in ['refs/heads/main', 'refs/heads/codex/container-ci'] && assertion.event_name in ['push', 'workflow_dispatch'] && assertion.sub == '${subjectPrefix}:environment:production' && assertion.workflow_ref in ['sejennings/air_quality_tracker/.github/workflows/ci.yaml@refs/heads/main', 'sejennings/air_quality_tracker/.github/workflows/ci.yaml@refs/heads/codex/container-ci']"
 Cloud iam workload-identity-pools providers $operation github --workload-identity-pool=$pool --project=$Project --location=global --issuer-uri=https://token.actions.githubusercontent.com --attribute-mapping='google.subject=assertion.sub,attribute.repository_id=assertion.repository_id' --attribute-condition=$condition --quiet
 $projectNumber = Cloud projects describe $Project --format='value(projectNumber)'
 Cloud iam service-accounts add-iam-policy-binding $account --project=$Project --role=roles/iam.workloadIdentityUser --member="principalSet://iam.googleapis.com/projects/$projectNumber/locations/global/workloadIdentityPools/$pool/attribute.repository_id/1377518824" --quiet
