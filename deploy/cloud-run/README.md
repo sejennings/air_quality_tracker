@@ -1,6 +1,6 @@
 # Cloud Run Jobs deployment
 
-Status: validation, initial training, weekly scoring, daily cleanup and the public dashboard are deployed in us-east1. GitHub Actions tests and publishes private images; Google deployment uses the scripts here. Automated deployment through Workload Identity Federation is a future step. Ubuntu deployment stays on hold.
+Status: validation, initial training, weekly scoring, daily cleanup and the public dashboard are deployed in us-east1. GitHub Actions tests and publishes private images, then uses Workload Identity Federation and [Terraform](../terraform/README.md) to update Cloud Run and Scheduler. The direct runtime deployment scripts here are legacy migration tools; avoid using them for Terraform-managed resources. Ubuntu deployment stays on hold.
 
 Public dashboard: https://air-quality-dashboard-236256523935.us-east1.run.app
 
