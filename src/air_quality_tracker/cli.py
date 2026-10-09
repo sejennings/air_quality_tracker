@@ -30,6 +30,9 @@ def inputs(path):
 
 
 def train(args):
+    if getattr(args, 'model_type', 'dense') == 'lstm':
+        from .lstm import train as train_lstm
+        return train_lstm(args)
     import joblib
     import numpy as np
     import pandas as pd
@@ -80,20 +83,36 @@ def score(args):
     if frame.empty:
         raise ValueError("No complete observations to score")
     scaler = joblib.load(bundle / "scaler.joblib")
-    x = scaler.transform(frame[meta["features"]])
-    prediction = tf.keras.models.load_model(bundle / "model.keras")(x, training=False).numpy()
+    model = tf.keras.models.load_model(bundle / "model.keras")
+    if meta.get('model_type') == 'lstm':
+        from .lstm import reconstruct
+        frame, x, prediction = reconstruct(frame, scaler, model, meta)
+    else:
+        x = scaler.transform(frame[meta["features"]])
+        prediction = model(x, training=False).numpy()
     if not np.isfinite(prediction).all():
         raise ValueError("Nonfinite model reconstruction")
     reconstructed = scaler.inverse_transform(prediction)
     frame["pm25_reconstructed"] = reconstructed[:, meta["features"].index("pm25")]
     frame["ozone_reconstructed"] = reconstructed[:, meta["features"].index("ozone_8hr_max")]
     errors = np.square(x - prediction)
-    frame["reconstruction_error"] = errors.mean(axis=1)
+    frame["reconstruction_error"] = (np.sqrt(errors[:, :2]) / meta['pollutant_thresholds']).max(axis=1) if meta.get('model_type') == 'lstm' else errors.mean(axis=1)
     frame["pm25_reconstruction_error"] = errors[:, meta["features"].index("pm25")]
     frame["ozone_reconstruction_error"] = errors[:, meta["features"].index("ozone_8hr_max")]
     frame["anomaly"] = frame.reconstruction_error > meta["threshold"]
+    if meta.get('model_type') == 'lstm':
+        for index, pollutant in enumerate(('pm25', 'ozone')):
+            frame[f'{pollutant}_absolute_standardized_error'] = np.sqrt(errors[:, index])
+            frame[f'{pollutant}_absolute_error_threshold'] = meta['pollutant_thresholds'][index]
+            frame[f'{pollutant}_anomaly'] = np.sqrt(errors[:, index]) > meta['pollutant_thresholds'][index]
     frame["anomaly_threshold"] = meta["threshold"]
     frame["model_version"] = meta["run_id"]
+    frame['model_type'] = meta.get('model_type', 'dense')
+    if getattr(args, 'score_start', None):
+        import pandas as pd
+        frame = frame[frame.date >= pd.Timestamp(args.score_start)]
+        if frame.empty:
+            raise ValueError('No complete windows in requested scoring period')
     out = args.operational / "scores"
     out.mkdir(parents=True, exist_ok=True)
     target = out / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8] + ".parquet")
@@ -105,10 +124,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--models", type=Path, default=Path("/models"))
     parser.add_argument("--operational", type=Path, default=Path("/operational"))
+    parser.add_argument('--model', dest='model_type', choices=('dense', 'lstm'), default='dense')
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("train", "score", "validate"):
         p = sub.add_parser(command)
         p.add_argument("--input", type=Path, required=True)
+        if command == 'score':
+            p.add_argument('--score-start', help='Include earlier context, but emit scores from this date only')
         if command == "train":
             p.add_argument("--validation-start", default="2024-01-01")
             p.add_argument("--test-start", default="2025-01-01")
@@ -118,6 +140,8 @@ def main():
     p.add_argument("run_id")
     sub.add_parser("cleanup")
     args = parser.parse_args()
+    if args.model_type == 'lstm':
+        args.models = args.models / 'lstm'
     if args.command == "cleanup":
         print(f"Removed {cleanup(args.operational)} expired files")
     elif args.command == "train":

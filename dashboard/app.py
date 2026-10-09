@@ -29,6 +29,12 @@ def load_artifacts():
     if "/" in run_id or run_id in (".", ".."):
         raise ValueError("Invalid model identifier")
     metadata = json.loads(models.blob(f"{run_id}/metadata.json").download_as_text())
+    catalog = {'Dense autoencoder': metadata}
+    if any(blob.name == 'lstm/active.json' for blob in models.list_blobs(prefix='lstm/active.json')):
+        lstm_id = json.loads(models.blob('lstm/active.json').download_as_text())['run_id']
+        if not lstm_id or '/' in lstm_id or '\\' in lstm_id or lstm_id in ('.', '..'):
+            raise ValueError('Invalid LSTM model identifier')
+        catalog['LSTM autoencoder'] = json.loads(models.blob(f'lstm/{lstm_id}/metadata.json').download_as_text())
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     frames, reports = [], []
     for blob in operational.list_blobs(prefix="scores/"):
@@ -37,19 +43,29 @@ def load_artifacts():
         if blob.size > 10_000_000:
             continue
         frame = pd.read_parquet(BytesIO(blob.download_as_bytes(if_generation_match=blob.generation)))
-        frame["result_type"] = "Weekly observations" if blob.name.startswith("scores/live/") else "Historical test (2025)"
+        frame['model_type'] = frame.get('model_type', 'lstm' if blob.name.startswith('scores/lstm/') else 'dense')
+        frame["result_type"] = "Weekly observations" if '/live/' in blob.name else "Historical test (2025)"
         frames.append(frame)
     for blob in operational.list_blobs(prefix="reports/"):
         if blob.time_created > cutoff and blob.name.endswith(".json") and blob.size < 100_000:
             reports.append(json.loads(blob.download_as_text(if_generation_match=blob.generation)))
-    return metadata, pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(), sorted(reports, key=lambda r: r["week_start"], reverse=True)
+    return catalog, pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(), sorted(reports, key=lambda r: r["week_start"], reverse=True)
 
 
 try:
-    meta, data, reports = load_artifacts()
+    catalog, all_data, reports = load_artifacts()
 except Exception:
     st.info("The first model and score artifacts are being prepared. Check back after the initial training job finishes.")
     st.stop()
+
+selected_model = st.sidebar.selectbox('Model', list(catalog))
+meta = catalog[selected_model]
+model_type = meta.get('model_type', 'dense')
+data = all_data[(all_data.model_type == model_type) & (all_data.model_version == meta['run_id'])].copy() if not all_data.empty else all_data
+if len(catalog) == 1:
+    st.sidebar.caption('The LSTM will appear after its first model bundle is initialized.')
+elif model_type == 'lstm':
+    st.sidebar.caption('Needs 14 consecutive observed days. Gaps are skipped, never filled.')
 
 def reconstruction_comparison(frame, key):
     st.subheader("Observed versus model reconstruction")
@@ -83,7 +99,10 @@ def reconstruction_comparison(frame, key):
 weekly_tab, historical_tab, model_tab = st.tabs(["Observations & scores", "Historical flags", "Model & training"])
 with weekly_tab:
     if reports:
-        latest = reports[0]
+        latest = reports[0].copy()
+        if model_type == 'lstm':
+            latest['scored_days'] = latest.get('lstm_scored_days', 0)
+            latest['status'] = latest.get('lstm_status', 'not-initialized')
         st.markdown(f"**Latest run:** {latest['week_start']} to {latest['week_end']} · {latest['status'].title()} · {latest['scored_days']}/7 days scored")
         if latest["missing_dates"]:
             st.warning("Missing daily inputs: " + ", ".join(latest["missing_dates"]) + ". No values are filled in or fabricated.")
@@ -108,7 +127,7 @@ with weekly_tab:
         chart = shown.set_index("date")[["reconstruction_error"]].rename(columns={"reconstruction_error": "Reconstruction error"})
         chart["Active model threshold"] = meta["threshold"]
         st.line_chart(chart, color=["#0f766e", "#db7846"])
-        st.caption("Above-threshold scores flag unusual combinations of pollutants and seasonality; they do not measure health risk or forecast pollution.")
+        st.caption('LSTM score is the largest last-day pollutant error divided by its validation 99th-percentile threshold; above 1 flags a day.' if model_type == 'lstm' else "Above-threshold scores flag unusual combinations of pollutants and seasonality; they do not measure health risk or forecast pollution.")
         left, right = st.columns(2)
         with left:
             st.subheader("PM2.5 · daily regional mean")
@@ -116,7 +135,7 @@ with weekly_tab:
         with right:
             st.subheader("Ozone · regional mean of daily 8-hour peaks")
             st.line_chart(shown.set_index("date")[["ozone_8hr_max"]], color="#597aab")
-        columns = [c for c in ("date", "pm25", "ozone_8hr_max", "reconstruction_error", "pm25_reconstruction_error", "ozone_reconstruction_error", "anomaly", "pm25_sites", "ozone_8hr_max_sites", "model_version") if c in shown]
+        columns = [c for c in ("date", "pm25", "ozone_8hr_max", "reconstruction_error", "pm25_reconstruction_error", "ozone_reconstruction_error", "anomaly", 'pm25_anomaly', 'ozone_anomaly', "pm25_sites", "ozone_8hr_max_sites", "model_version") if c in shown]
         st.subheader("Daily results")
         st.dataframe(shown[columns], hide_index=True, width="stretch")
         st.download_button("Download displayed scores", shown[columns].to_csv(index=False), file_name="air-quality-scores.csv", mime="text/csv")
@@ -173,8 +192,8 @@ with historical_tab:
         reconstruction_comparison(displayed, "historical-comparison")
 
 with model_tab:
-    st.subheader("Dense autoencoder baseline")
-    st.write("Four inputs: PM2.5, 8-hour ozone, and sine/cosine annual seasonality. A two-unit latent layer reconstructs those inputs; squared reconstruction errors determine anomaly scores.")
+    st.subheader('LSTM autoencoder' if model_type == 'lstm' else "Dense autoencoder baseline")
+    st.write('Four inputs across 14 observed days: PM2.5, ozone, and annual seasonality. LSTM layers compress and reconstruct each sequence; only the last day determines its pollutant scores. This is reconstruction, not forecasting.' if model_type == 'lstm' else "Four inputs: PM2.5, 8-hour ozone, and sine/cosine annual seasonality. A two-unit latent layer reconstructs those inputs; squared reconstruction errors determine anomaly scores.")
     st.caption(f"Active version: {meta['run_id']}")
     st.markdown("**Training:** 2021–2023 · **Validation:** 2024 · **Untouched test:** 2025")
     rows = [{"Period": name.title(), "Rows": values["rows"], "Reconstruction MSE": values["mse"], "Flagged fraction": values["anomaly_rate"]} for name, values in meta["metrics"].items()]
@@ -184,7 +203,26 @@ with model_tab:
     history.index += 1
     history.index.name = "Epoch"
     st.line_chart(history, color=["#0f766e", "#597aab"])
-    st.caption(f"Seed {meta['seed']} · early stopping with restored best weights · threshold {meta['threshold']:.4f} (95th percentile of training errors)")
+    st.caption(f"Seed {meta['seed']} · early stopping with restored best weights · " + ('separate validation 99th-percentile absolute pollutant thresholds; normalized flag threshold 1' if model_type == 'lstm' else f"threshold {meta['threshold']:.4f} (95th percentile of training errors)"))
+    if len(catalog) > 1 and not all_data.empty:
+        st.subheader('Models on the same held-out dates')
+        parts = []
+        for label, metadata in catalog.items():
+            part = all_data[(all_data.result_type == 'Historical test (2025)') & (all_data.model_version == metadata['run_id'])].sort_values('date').drop_duplicates('date', keep='last')
+            parts.append((label, part))
+        common = set.intersection(*(set(part.date) for _, part in parts))
+        rows = []
+        for label, part in parts:
+            part = part[part.date.isin(common)]
+            if part.empty:
+                continue
+            _, counts = evaluate(part, 35.5, 71., reconstructed=False)
+            rows.append({'Model': label, 'Common days': len(part), 'PM2.5 MAE (µg/m³)': (part.pm25 - part.pm25_reconstructed).abs().mean(), 'Ozone MAE (ppb)': (part.ozone_8hr_max - part.ozone_reconstructed).abs().mean(), **counts})
+        if rows:
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
+            st.caption('Same observed concentration reference: PM2.5 ≥35.5 µg/m³ or ozone ≥71 ppb. Compares model anomaly flags on common dates only; raw model losses use different definitions and are not directly comparable.')
+        else:
+            st.info('Comparison needs retained historical scores for both active models.')
     st.info("Historical flags reports accuracy, precision and recall against an independent observed-concentration rule. Reconstruction loss measures concentration reconstruction quality. The concentration benchmark does not label every kind of unusual seasonal or pollution event.")
     st.markdown(f"[Source repository](https://github.com/sejennings/air_quality_tracker) · Code revision `{meta.get('git_commit', 'unknown')[:12]}`")
 st.divider()
