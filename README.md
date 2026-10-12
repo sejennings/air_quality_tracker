@@ -19,9 +19,10 @@ Want to try github actions
 
 
               LIVE PIPELINE
+              
                     │
-              GitHub Actions
-              runs every hour
+              Google Cloud Run Jobs
+              runs every week
                     │
           ┌─────────┴─────────┐
           ▼                   ▼
