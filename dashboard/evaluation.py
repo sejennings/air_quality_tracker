@@ -4,6 +4,9 @@
 def evaluate(frame, pm25_limit, ozone_limit, reconstructed=False):
     result = frame.copy()
     observed = (result.pm25 >= pm25_limit) | (result.ozone_8hr_max >= ozone_limit)
+    if not reconstructed and {'model_type', 'pm25_window_observed_max', 'ozone_window_observed_max'}.issubset(result.columns):
+        window_reference = (result.pm25_window_observed_max >= pm25_limit) | (result.ozone_window_observed_max >= ozone_limit)
+        observed = observed.where(result.model_type != 'cnn', window_reference)
     decision = ((result.pm25_reconstructed >= pm25_limit) | (result.ozone_reconstructed >= ozone_limit)) if reconstructed else result.anomaly.astype(bool)
     result['Observed exceedance'] = observed
     result['Compared decision'] = decision

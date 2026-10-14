@@ -39,6 +39,17 @@ class DashboardTest(unittest.TestCase):
         lstm_buffer = BytesIO()
         lstm_frame.to_parquet(lstm_buffer, index=False)
         payloads['scores/lstm/historical/2025-test.parquet'] = lstm_buffer.getvalue()
+        cnn_meta = {**lstm_meta, 'run_id': 'cnn-run', 'model_type': 'cnn', 'lookback': 28, 'pollutant_thresholds': {'pm25': 1., 'ozone': 1.}, 'pollutant_history': {'pm25': metadata['history'], 'ozone': metadata['history']}}
+        payloads['cnn/active.json'] = json.dumps({'run_id': 'cnn-run'}).encode()
+        payloads['cnn/cnn-run/metadata.json'] = json.dumps(cnn_meta).encode()
+        cnn_frame = lstm_frame.copy()
+        cnn_frame['model_version'] = 'cnn-run'
+        cnn_frame['model_type'] = 'cnn'
+        cnn_frame['pm25_window_observed_max'] = 40.
+        cnn_frame['ozone_window_observed_max'] = 30.
+        cnn_buffer = BytesIO()
+        cnn_frame.to_parquet(cnn_buffer, index=False)
+        payloads['scores/cnn/historical/2025-test.parquet'] = cnn_buffer.getvalue()
         class Blob:
             def __init__(self, name):
                 self.name = name
@@ -75,13 +86,17 @@ class DashboardTest(unittest.TestCase):
             decisions = [table.value for table in app.dataframe if 'Model decision' in table.value.columns][-1]
             self.assertEqual(decisions['Model decision'].tolist(), ['Flagged', 'Not flagged'])
             comparison = next(table.value for table in app.dataframe if 'Common days' in table.value.columns)
-            self.assertEqual(comparison['Common days'].tolist(), [2, 2])
+            self.assertEqual(comparison['Common days'].tolist(), [2, 2, 2])
             app.sidebar.selectbox[0].select('LSTM autoencoder').run()
             self.assertEqual(len(app.exception), 0)
             self.assertTrue(any(heading.value == 'LSTM autoencoder' for heading in app.subheader))
             errors = next(table.value for table in app.dataframe if 'MAE' in table.value.columns)
             self.assertEqual(errors['MAE'].tolist(), [3., 3.])
             self.assertTrue(any(metric.label == 'Days scored' and metric.value == '2' for metric in app.metric))
+            app.sidebar.selectbox[0].select('CNN autoencoder').run()
+            self.assertEqual(len(app.exception), 0)
+            self.assertTrue(any(heading.value == 'CNN autoencoder' for heading in app.subheader))
+            self.assertTrue(any('preceding 28-day window' in warning.value for warning in app.warning))
 
     def test_independent_rule_and_confusion_counts(self):
         frame = pd.DataFrame({'pm25': [35.5, 1., 36., 1.], 'ozone_8hr_max': [10., 71., 10., 10.], 'pm25_reconstructed': [36., 1., 1., 36.], 'ozone_reconstructed': [10., 10., 10., 10.], 'anomaly': [True, False, False, True]})
@@ -98,6 +113,21 @@ class DashboardTest(unittest.TestCase):
         _, no_events = evaluate(frame.iloc[[3]], 100., 100., reconstructed=True)
         self.assertIsNone(no_events['Recall'])
         self.assertIsNone(no_events['Precision'])
+        window_frame = frame.iloc[[3]].copy()
+        window_frame['pm25_window_observed_max'] = 40.
+        window_frame['ozone_window_observed_max'] = 20.
+        window_frame['anomaly'] = True
+        window_frame['model_type'] = 'cnn'
+        _, window_counts = evaluate(window_frame, 35.5, 71.)
+        self.assertEqual(window_counts['Correctly flagged'], 1)
+        _, daily_counts = evaluate(window_frame, 35.5, 71., reconstructed=True)
+        self.assertEqual(daily_counts['False alarms'], 1)
+        window_frame['model_type'] = 'dense'
+        window_frame['pm25'] = 40.
+        window_frame['pm25_window_observed_max'] = float('nan')
+        window_frame['ozone_window_observed_max'] = float('nan')
+        _, dense_counts = evaluate(window_frame, 35.5, 71.)
+        self.assertEqual(dense_counts['Correctly flagged'], 1)
 
 
 if __name__ == '__main__':
