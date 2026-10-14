@@ -91,3 +91,41 @@ The dashboard gains a model selector and a comparison on common historical
 test dates, including reconstruction MAE and independently computed
 observed-exceedance confusion counts. Each test split loses at least its
 first 13 days to sequence context; additional gaps reduce coverage.
+
+## Third model: independent pollutant CNN autoencoders
+
+`notebooks/1D CNN Autoencoder.py` is now a runnable entry point to the maintained
+implementation in `src/air_quality_tracker/cnn.py`. It loads the real parquet
+dataset and uses `pm25` and `ozone_8hr_max`. After `pip install -e .`, run
+`python "notebooks/1D CNN Autoencoder.py" --epochs 100` to save a local candidate.
+The default output is ignored under `runtime/cnn-candidates/cnn`.
+
+The CNN uses the source's 28-day windows, independent PM2.5 and ozone networks,
+strided Conv1D compression, dropout and upsampling decoder. Each pollutant's
+scaler is fit only on its observed training values. Windows stay inside their
+split and cannot cross gaps. Training uses 2021–2023, early stopping uses
+January–June 2024, separate threshold calibration uses July–December 2024,
+and the untouched test period is 2025. Separate calibration 99th-percentile
+window MSE thresholds define flags; the combined score is the maximum
+window-MSE/threshold ratio. A flag refers to a window, not a confirmed event
+on its end date. End-day pollutant reconstructions are also saved.
+
+The container CLI accepts `--model cnn` before `train`, `promote`, or `score`.
+CNN candidates and their separate active pointer live under `/models/cnn`;
+promotion never changes the dense or LSTM pointers. Scoring emits dates where
+both pollutants have complete windows. Weekly runs collect 27 preceding days
+as context, emit only the target week, and report partial coverage when gaps
+prevent scoring. Operational scores still expire after 30 days.
+
+After merge and successful CI deployment, initialize the CNN once:
+
+```powershell
+gcloud run jobs execute air-quality-bootstrap --project=air-quality-tracker-510721 --region=us-east1 --args=bootstrap-cnn,--epochs,100 --wait
+```
+
+This uses existing infrastructure and permissions, retains the original models,
+and makes the CNN available in the dashboard. No new secrets are required.
+The dashboard shows both pollutant training curves. For CNN window flags,
+the independent concentration reference is any observed exceedance within
+that window; reconstructed-concentration evaluation remains end-day only.
+Window counts are aligned to end dates and are not unique event counts.

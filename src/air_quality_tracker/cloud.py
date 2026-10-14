@@ -53,14 +53,15 @@ def lease(bucket, name, hours=1):
 
 
 def download_model(bucket, local, model_type='dense'):
-    prefix = 'lstm/' if model_type == 'lstm' else ''
+    prefix = model_type + '/' if model_type != 'dense' else ''
     pointer = json.loads(bucket.blob(prefix + "active.json").download_as_text())
     run_id = pointer["run_id"]
     if not run_id or Path(run_id).name != run_id or run_id in (".", ".."):
         raise ValueError("Invalid active model identifier")
     folder = local / run_id
     folder.mkdir(parents=True)
-    for name in ("metadata.json", "model.keras", "scaler.joblib"):
+    files = ('metadata.json', 'pm25.keras', 'ozone.keras', 'scaler.joblib') if model_type == 'cnn' else ('metadata.json', 'model.keras', 'scaler.joblib')
+    for name in files:
         bucket.blob(f"{prefix}{run_id}/{name}").download_to_filename(folder / name)
     (local / "active.json").write_text(json.dumps(pointer))
     return run_id
@@ -69,15 +70,15 @@ def download_model(bucket, local, model_type='dense'):
 def bootstrap(args, history, models, operational, local):
     from .cli import train, score
     import pandas as pd
-    model_type = 'lstm' if args.command == 'bootstrap-lstm' else 'dense'
-    prefix = 'lstm/' if model_type == 'lstm' else ''
+    model_type = args.command.removeprefix('bootstrap-') if args.command != 'bootstrap' else 'dense'
+    prefix = model_type + '/' if model_type != 'dense' else ''
     if models.blob(prefix + "active.json").exists():
         print("Active model already exists; bootstrap left it unchanged")
         return
     data = local / "historical.parquet"
     history.blob("triangle_pm25_ozone_daily_2021_2025.parquet").download_to_filename(data)
     model_dir = local / "models"
-    train(SimpleNamespace(input=data, models=model_dir, model_type=model_type, seed=42, epochs=args.epochs, validation_start="2024-01-01", test_start="2025-01-01"))
+    train(SimpleNamespace(input=data, models=model_dir, model_type=model_type, seed=42, epochs=args.epochs, validation_start="2024-01-01", calibration_start='2024-07-01', test_start="2025-01-01"))
     bundle = next(model_dir.iterdir())
     meta = json.loads((bundle / "metadata.json").read_text())
     meta["input_units"] = {"pm25": "ug/m3", "ozone_8hr_max": "ppb"}
@@ -116,27 +117,28 @@ def weekly(args, models, operational, local):
         score(SimpleNamespace(input=source, models=local / "models", operational=local / "operational"))
         result = next((local / "operational" / "scores").iterdir())
         operational.blob(f"scores/live/{key}.parquet").upload_from_filename(result)
-    if models.blob('lstm/active.json').exists():
-        # A seven-day run needs thirteen preceding calendar days for its first window.
-        context = collect_week(start - timedelta(days=13), start)
+    for model_type, lookback in (('lstm', 14), ('cnn', 28)):
+        if not models.blob(f'{model_type}/active.json').exists():
+            continue
+        context = collect_week(start - timedelta(days=lookback - 1), start)
         import pandas as pd
-        lstm_source = local / 'lstm-input.parquet'
-        pd.concat([context, frame], ignore_index=True).to_parquet(lstm_source, index=False)
-        run_id = download_model(models, local / 'lstm-models', 'lstm')
-        report['lstm_model_version'] = run_id
+        sequence_source = local / f'{model_type}-input.parquet'
+        pd.concat([context, frame], ignore_index=True).to_parquet(sequence_source, index=False)
+        run_id = download_model(models, local / f'{model_type}-models', model_type)
+        report[f'{model_type}_model_version'] = run_id
         try:
-            score(SimpleNamespace(input=lstm_source, models=local / 'lstm-models', operational=local / 'lstm-operational', score_start=str(start)))
+            score(SimpleNamespace(input=sequence_source, models=local / f'{model_type}-models', operational=local / f'{model_type}-operational', score_start=str(start)))
         except ValueError as error:
-            if not str(error).startswith(('No complete 14-day windows', 'No complete windows in requested')):
+            if not str(error).startswith(('No complete 14-day windows', 'No complete 28-day windows', 'No complete windows in requested')):
                 raise
-            report['lstm_status'] = 'no-complete-windows'
-            report['lstm_scored_days'] = 0
+            report[f'{model_type}_status'] = 'no-complete-windows'
+            report[f'{model_type}_scored_days'] = 0
         else:
-            result = next((local / 'lstm-operational' / 'scores').iterdir())
+            result = next((local / f'{model_type}-operational' / 'scores').iterdir())
             scored = pd.read_parquet(result)
-            report['lstm_scored_days'] = len(scored)
-            report['lstm_status'] = 'complete' if len(scored) == 7 else 'partial'
-            operational.blob(f'scores/lstm/live/{key}.parquet').upload_from_filename(result)
+            report[f'{model_type}_scored_days'] = len(scored)
+            report[f'{model_type}_status'] = 'complete' if len(scored) == 7 else 'partial'
+            operational.blob(f'scores/{model_type}/live/{key}.parquet').upload_from_filename(result)
     write_json(operational.blob(f"reports/{key}.json"), report)
     print(json.dumps(report))
     if not len(complete):
@@ -145,7 +147,7 @@ def weekly(args, models, operational, local):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("bootstrap", "bootstrap-lstm", "weekly", "cleanup"))
+    parser.add_argument("command", choices=("bootstrap", "bootstrap-lstm", 'bootstrap-cnn', "weekly", "cleanup"))
     parser.add_argument("--history-bucket", default="air-quality-tracker-510721-historical")
     parser.add_argument("--models-bucket", default="air-quality-tracker-510721-models")
     parser.add_argument("--operational-bucket", default="air-quality-tracker-510721-operational")

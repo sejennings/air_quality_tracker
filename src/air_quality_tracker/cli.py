@@ -11,7 +11,7 @@ from .retention import cleanup
 FEATURES = ["pm25", "ozone_8hr_max", "doy_sin", "doy_cos"]
 
 
-def inputs(path):
+def inputs(path, drop_incomplete=True):
     import numpy as np
     import pandas as pd
     frame = pd.read_parquet(path)
@@ -26,10 +26,13 @@ def inputs(path):
     frame["doy_sin"], frame["doy_cos"] = np.sin(phase), np.cos(phase)
     if np.isinf(frame[FEATURES].to_numpy(dtype=float)).any():
         raise ValueError("Infinite model inputs")
-    return frame.dropna(subset=FEATURES)
+    return frame.dropna(subset=FEATURES) if drop_incomplete else frame
 
 
 def train(args):
+    if getattr(args, 'model_type', 'dense') == 'cnn':
+        from .cnn import train as train_cnn
+        return train_cnn(args)
     if getattr(args, 'model_type', 'dense') == 'lstm':
         from .lstm import train as train_lstm
         return train_lstm(args)
@@ -79,6 +82,9 @@ def score(args):
     if bundle.parent.resolve() != args.models.resolve():
         raise ValueError("Invalid model path")
     meta = json.loads((bundle / "metadata.json").read_text())
+    if meta.get('model_type') == 'cnn':
+        from .cnn import score as score_cnn
+        return score_cnn(args, bundle, meta)
     frame = inputs(args.input)
     if frame.empty:
         raise ValueError("No complete observations to score")
@@ -124,7 +130,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--models", type=Path, default=Path("/models"))
     parser.add_argument("--operational", type=Path, default=Path("/operational"))
-    parser.add_argument('--model', dest='model_type', choices=('dense', 'lstm'), default='dense')
+    parser.add_argument('--model', dest='model_type', choices=('dense', 'lstm', 'cnn'), default='dense')
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("train", "score", "validate"):
         p = sub.add_parser(command)
@@ -134,14 +140,15 @@ def main():
         if command == "train":
             p.add_argument("--validation-start", default="2024-01-01")
             p.add_argument("--test-start", default="2025-01-01")
+            p.add_argument('--calibration-start', default='2024-07-01', help='CNN only: independent threshold-calibration split')
             p.add_argument("--epochs", type=int, default=200)
             p.add_argument("--seed", type=int, default=42)
     p = sub.add_parser("promote")
     p.add_argument("run_id")
     sub.add_parser("cleanup")
     args = parser.parse_args()
-    if args.model_type == 'lstm':
-        args.models = args.models / 'lstm'
+    if args.model_type != 'dense':
+        args.models = args.models / args.model_type
     if args.command == "cleanup":
         print(f"Removed {cleanup(args.operational)} expired files")
     elif args.command == "train":
@@ -153,7 +160,8 @@ def main():
         print(f"Valid rows: {len(inputs(args.input))}")
     else:
         bundle = args.models / args.run_id
-        if bundle.parent.resolve() != args.models.resolve() or not all((bundle / f).is_file() for f in ("metadata.json", "model.keras", "scaler.joblib")):
+        files = ('metadata.json', 'pm25.keras', 'ozone.keras', 'scaler.joblib') if args.model_type == 'cnn' else ('metadata.json', 'model.keras', 'scaler.joblib')
+        if bundle.parent.resolve() != args.models.resolve() or not all((bundle / f).is_file() for f in files):
             raise ValueError("Invalid or incomplete model bundle")
         pending = args.models / "active.pending"
         pending.write_text(json.dumps({"run_id": args.run_id}))

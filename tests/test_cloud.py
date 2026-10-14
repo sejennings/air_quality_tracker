@@ -72,7 +72,7 @@ class TwoModelWeeklyTests(unittest.TestCase):
         def score(args):
             frame = pd.read_parquet(args.input)
             if getattr(args, 'score_start', None):
-                self.assertEqual(len(frame), 20)
+                self.assertIn(len(frame), (20, 34))
                 frame = frame[frame.date >= pd.Timestamp(args.score_start)]
             output = args.operational / 'scores'
             output.mkdir(parents=True)
@@ -87,6 +87,9 @@ class TwoModelWeeklyTests(unittest.TestCase):
             self.assertIn('scores/live/2026-09-28.parquet', names)
             self.assertIn('scores/lstm/live/2026-09-28.parquet', names)
             self.assertEqual(report.call_args.args[1]['lstm_scored_days'], 7)
+            self.assertEqual(collected.call_args_list[2].args, (start - timedelta(days=27), start))
+            self.assertIn('scores/cnn/live/2026-09-28.parquet', names)
+            self.assertEqual(report.call_args.args[1]['cnn_scored_days'], 7)
 
     def test_missing_lstm_windows_does_not_discard_dense_scores(self):
         from datetime import timedelta
