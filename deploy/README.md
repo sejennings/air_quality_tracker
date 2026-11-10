@@ -1,6 +1,6 @@
 # Ubuntu deployment
 
-This first milestone scores the existing daily PM2.5/ozone Parquet dataset. Live collection, automatic release polling, dashboard, MLflow, and vulnerability/provenance gates are follow-up work. Do not enable the scoring timer until its input is a maintained daily dataset: the supplied historical file is a smoke-test input and would be rescored every day.
+This alternative host setup is on hold. Production uses [Cloud Run](cloud-run/README.md), which provides live collection and a public dashboard. The host setup below scores a supplied daily PM2.5/ozone Parquet dataset; it does not configure live collection. Do not enable the scoring timer until its input is a maintained daily dataset: the supplied historical file is a smoke-test input and would be rescored every day.
 
 ## Initial host setup
 

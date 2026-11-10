@@ -1,49 +1,27 @@
-## Anomaly Detection Workflow
+# Model development
+
+The maintained pipeline has three reconstruction models: a dense autoencoder, a 14-day LSTM autoencoder, and independent 28-day CNN autoencoders for PM2.5 and ozone. The runnable implementations live in `src/air_quality_tracker`; notebooks provide exploration and entry points.
+
+These models learn from pollutant concentrations, with seasonal sine/cosine features for the dense and LSTM models. Weather ingestion, forecasting, GRU models, and variational autoencoders are exploratory ideas rather than deployed features.
 
 ```mermaid
 flowchart TD
-    A["Exploratory Data Analysis"] --> B["Seasonality Adjustment<br/>and Feature Engineering"]
-
-    B --> C["Dense Autoencoder"]
-    B --> D["LSTM Autoencoder"]
-    B --> E["LSTM/GRU Forecasting"]
-    B --> F["1D CNN Autoencoder"]
-    B --> G["Variational Autoencoder"]
-
-    C --> C1["Weather Variables"]
-    C1 --> C2["Dense: 32 Neurons"]
-    C2 --> C3["Latent Space: 8 Neurons"]
-    C3 --> C4["Dense: 32 Neurons"]
-    C4 --> C5["Reconstructed Weather Variables"]
-
-    D --> D1["14-Day Weather Sequence"]
-    D1 --> D2["LSTM Encoder"]
-    D2 --> D3["Compressed Representation"]
-    D3 --> D4["LSTM Decoder"]
-    D4 --> D5["Reconstructed 14-Day Sequence"]
-
-    E --> E1["Past 14 Days"]
-    E1 --> E2["LSTM or GRU"]
-    E2 --> E3["Tomorrow's Predicted Weather"]
-    E3 --> E4["Forecast Error"]
-
-    F --> F1["30-Day Weather Sequence"]
-    F1 --> F2["Conv1D Encoder"]
-    F2 --> F3["Latent Representation"]
-    F3 --> F4["Conv1DTranspose Decoder"]
-    F4 --> F5["Reconstructed Sequence"]
-
-    G --> G1["Weather Variables"]
-    G1 --> G2["Probabilistic Latent Space"]
-    G2 --> G3["Reconstructed Weather Variables"]
-
-    C5 --> H["Calculate Anomaly Scores"]
-    D5 --> H
-    E4 --> H
-    F5 --> H
-    G3 --> H
-
-    H --> I["Compare Flagged Dates Across Models"]
-    I --> J["Examine Specific Weather Events"]
+    A[Historical EPA AQS concentrations] --> B[Chronological splits and training-only scalers]
+    B --> C[Daily dense autoencoder]
+    B --> D[14-day LSTM autoencoder]
+    B --> E[28-day independent pollutant CNNs]
+    C --> F[Reconstruction errors and model-specific thresholds]
+    D --> F
+    E --> F
+    F --> G[Held-out evaluation and candidate review]
+    G --> H[Explicit promotion]
+    H --> I[Weekly AirNow scoring and dashboard]
 ```
 
+Training uses 2021–2023. The dense and LSTM models use 2024 for validation and 2025 for held-out testing. The CNN uses January–June 2024 for early stopping and July–December for independent threshold calibration, then tests on 2025. Windows cannot cross split boundaries or gaps.
+
+The dense network has hidden layers of 3, 2, and 3 units. Its threshold is the training 95th percentile of reconstruction MSE. The LSTM has a 32/16 encoder, repeated latent representation, and a 16/32 decoder; separate validation 99th-percentile pollutant thresholds apply to end-day absolute standardized errors. The CNN uses strided convolution, dropout, and an upsampling decoder, with separate calibration 99th-percentile window MSE thresholds.
+
+Compare models on common dates using errors in pollutant units and report coverage alongside the results. Their raw losses use different definitions. CNN window flags and daily flags also describe different intervals.
+
+An observed-concentration exceedance is a useful independent benchmark, but it is not a verified event label. None of the deployed models forecasts future concentrations. See the [project guide](../README.md) for local commands and the retraining review process.
