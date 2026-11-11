@@ -4,7 +4,7 @@ Status: validation, initial training, weekly scoring, daily cleanup and the publ
 
 Public dashboard: https://air-quality-dashboard-236256523935.us-east1.run.app
 
-The first weekly run scored all seven days of September 28–October 4, 2026. Weekly scoring runs Monday at 08:00 America/New_York for the previous Monday–Sunday. Cleanup runs daily at 05:00. The retained model was trained once; weekly scoring does not retrain it.
+The first weekly run scored all seven days of September 28–October 4, 2026. Weekly scoring runs Monday at 08:00 America/New_York for the previous Monday–Sunday. Cleanup runs daily at 05:00. Each active model is retained between runs; weekly scoring does not retrain it.
 
 ## Runtime layout
 
@@ -18,7 +18,7 @@ The cloud adapter downloads inputs and models into execution-local scratch space
 
 - Initial smoke job: validate the maintained historical dataset; run once and inspect success.
 - Training job: on demand initially; save a candidate bundle and metrics without automatically promoting it.
-- Scoring job: use a promoted model and maintained daily input; do not schedule until live daily ingestion exists.
+- Weekly scoring job: collect live AirNow observations and score them with the active dense, LSTM, and CNN models when their pointers exist. Check each model's coverage in the weekly report.
 - Operational cleanup: use object creation metadata and the Storage API, with the lifecycle rule as a second line of cleanup. The current local last-modified-time cleanup must not be applied blindly to object-store mounts.
 
 Start training/scoring at 2 CPUs and 4 GiB memory, one task, parallelism 1, no automatic retries for training until retry behavior is verified. Limits can be adjusted after a measured execution. Cloud Run task parallelism does not prevent overlapping job executions: add an object-generation-based lease or idempotency before scheduling.
@@ -52,7 +52,7 @@ Billing and your project permissions must be verified before running. This scrip
 
 `air-quality-cloud bootstrap` stages historical input locally, trains the dense autoencoder with 2024 validation and untouched 2025 testing, uploads a complete model bundle, creates the initial active pointer with a generation precondition, and seeds historical test scores. Repeated bootstrap runs retain the existing active model. It does not retrain weekly.
 
-`air-quality-cloud weekly` scores the previous Monday?Sunday using America/New_York week boundaries. The public AirNow daily files provide monitor concentrations for Wake, Durham and Orange counties: PM2.5 24-hour means in ug/m3 and ozone daily 8-hour peaks in ppb, averaged per pollutant across available sites. The historical ozone dataset is also ppb. AQI values are not used as model inputs. AirNow is preliminary; its monitor coverage and aggregation can differ from AQS. Counts and missing dates are stored alongside scores. Missing inputs are never imputed.
+`air-quality-cloud weekly` scores the previous Monday–Sunday using America/New_York week boundaries. The public AirNow daily files provide monitor concentrations for Wake, Durham and Orange counties: PM2.5 24-hour means in ug/m3 and ozone daily 8-hour peaks in ppb, averaged per pollutant across available sites. The historical ozone dataset is also ppb. AQI values are not used as model inputs. AirNow is preliminary; its monitor coverage and aggregation can differ from AQS. Counts and missing dates are stored alongside scores. Missing inputs are never imputed.
 
 Cloud writes use the Storage API, with execution-local scratch files. A generation-based lease prevents overlapping weekly runs. Output keys include the week start, so reruns update one result rather than creating duplicates. Job retries are disabled. Completed model bundles and historical inputs are retained; all operational objects expire after 30 days. Daily API cleanup supplements bucket lifecycle deletion. Operational soft delete and versioning are disabled. Lifecycle deletion and daily cleanup have scheduling delay and do not guarantee deletion at the exact 30-day second. Cloud Logging's default bucket is set to 30-day retention.
 
